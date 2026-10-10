@@ -1,9 +1,5 @@
-name: Deploy static site to Pages
-on:
-  push:
-    branches: [main]
-    paths: ['docs/**']
-  workflow_dispatch:
+name: Redeploy pages
+on: [push, workflow_dispatch]
 permissions:
   contents: read
   pages: write
