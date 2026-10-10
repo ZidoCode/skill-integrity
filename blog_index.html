@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your agent skills were install-once — skill-integrity</title>
+<meta name="description" content="Detecting rug-pull changes to installed agent skills. One Python file, zero dependencies, no network calls.">
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;background:#0d1117;color:#c9d1d9;font:16px/1.7 -apple-system,'Segoe UI',Roboto,sans-serif}
+  main{max-width:720px;margin:0 auto;padding:48px 20px}
+  h1{color:#f0f6fc;font-size:1.9em;line-height:1.25}
+  h2{color:#f0f6fc;margin-top:2em;padding-bottom:.3em;border-bottom:1px solid #21262d}
+  a{color:#58a6ff}
+  code,pre{background:#161b22;border-radius:6px;font:0.9em ui-monospace,SFMono-Regular,Menlo,monospace}
+  code{padding:.15em .4em}
+  pre{padding:16px;overflow-x:auto;border:1px solid #21262d}
+  .meta{color:#8b949e;font-size:.9em;margin-bottom:2em}
+  .box{border:1px solid #d29922;border-radius:8px;padding:14px 18px;background:#161b22;margin:1.5em 0}
+  .cta{display:inline-block;background:#238636;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:600;margin:8px 8px 8px 0}
+  .cta.ghost{background:transparent;border:1px solid #30363d;color:#58a6ff}
+  footer{border-top:1px solid #21262d;margin-top:3em;padding-top:1.5em;color:#8b949e;font-size:.9em}
+</style>
+</head>
+<body>
+<main>
+<article>
+<h1>Your agent skills were install-once. They don't stay that way.</h1>
+<p class="meta">October 10, 2026 · <a href="https://github.com/ZidoCode/skill-integrity">ZidoCode/skill-integrity</a></p>
+
+<p>Back in January 2026, security researchers audited a major skill marketplace and found <strong>341 malicious skills out of 2,857</strong> — 11.9%. One coordinated campaign. By February the count of confirmed malicious skills crossed a thousand.</p>
+
+<p>But here's the part that stuck with me: the audits all happened at <em>publish time</em>.</p>
+
+<h2>The gap nobody closes</h2>
+<p>Every skill you install — a <code>SKILL.md</code>, some scripts, maybe a helper module — lands as plain files on your disk. The marketplace scan checks them once, at the moment of publication. After that, the files are yours, and nothing watches them.</p>
+<p>Meanwhile skills get updated. Upstream repos push changes. You pull. A helper script that was clean when you installed it in March doesn't have to be clean in June — and no re-scan fires, because from the registry's point of view nothing happened. The rug-pull class of attack isn't theoretical; it's documented, with hashing-based detection named as the mitigation and then left as an exercise for the reader.</p>
+<p>I looked for a tool that closes this gap: something that says "the skills on your disk are not what you installed." It didn't exist as a standalone, cross-platform thing — detection research is all publish-time or LLM-based triage. So I built the boring version.</p>
+
+<h2>skill-integrity</h2>
+<p>One Python file, zero dependencies, no network calls:</p>
+<pre>python3 skill_integrity.py snapshot    # right after installing skills
+python3 skill_integrity.py check       # any time later</pre>
+<p>The check output:</p>
+<pre>skills scanned: 23  (snapshot taken 2026-10-10T21:44:32+0800)
+
+[~] pdf-extractor — MODIFIED
+    changed: SKILL.md
+    added:   fetch_helper.sh
+
+1 skill(s) changed since snapshot. Review diffs before trusting them.</pre>
+<p>That's the whole product. SHA-256 every file, keep a local manifest, diff against it. Modified files, added files, deleted skills, brand-new skills — all four show up. <code>--json</code> for machines, <code>--fail-on-change</code> for CI:</p>
+<pre>0 */12 * * * python3 ~/skill-integrity/skill_integrity.py check --fail-on-change --json &gt;&gt; ~/.skill-integrity/checks.log</pre>
+
+<h2>What it deliberately doesn't do</h2>
+<p>A hash catches <strong>any byte change</strong>. It cannot judge intent — a legitimate upstream update and a malicious rewrite look identical. That's not a limitation I'm hiding; it's the shape of the problem. The tool's job is to be the tripwire: something changed, here's the file list, go read the diff. Reading the diff before trusting the skill is your half of the contract.</p>
+<p>This is the same honesty boundary I keep hitting in this suite: signature systems are a step behind novel attacks, and pretending otherwise is how security tools lose trust. <a href="https://github.com/ZidoCode/agent-ledger">agent-ledger</a> says "novel evasions remain an open problem" in its README; skill-integrity says "hashes don't read minds."</p>
+
+<div class="box">
+<strong>Run it now:</strong>
+<pre style="margin:.5em 0 0">git clone https://github.com/ZidoCode/skill-integrity
+python3 skill-integrity/skill_integrity.py snapshot</pre>
+</div>
+
+<p>
+<a class="cta" href="https://github.com/ZidoCode/skill-integrity">★ GitHub repo</a>
+<a class="cta ghost" href="https://dev.to/zidocode/your-agent-skills-were-install-once-n08">Read on dev.to</a>
+</p>
+
+<footer>
+Building in public: agent security and reliability tooling.<br>
+Suite: <a href="https://github.com/ZidoCode/agent-ledger">agent-ledger</a> · <a href="https://github.com/ZidoCode/agent-janitor">agent-janitor</a> · <a href="https://github.com/ZidoCode">github.com/ZidoCode</a>
+</footer>
+</article>
+</main>
+</body>
+</html>
