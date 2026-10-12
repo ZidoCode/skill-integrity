@@ -88,10 +88,11 @@ class SkillIntegrityTest(unittest.TestCase):
         si.STATE_DIR = str(state)
         try:
             skills = self.scan()
-            si.save_manifest(skills)
+            si.save_manifest(skills, self.dirs)
             m = si.load_manifest()
             self.assertEqual(m["version"], si.MANIFEST_VERSION)
             self.assertEqual(m["skills"], skills)
+            self.assertEqual(m["dirs"], self.dirs)
         finally:
             si.STATE_DIR = old
 
@@ -106,10 +107,42 @@ class SkillIntegrityTest(unittest.TestCase):
         finally:
             si.STATE_DIR = old
 
-    def test_11_cli_e2e_snapshot_check_modified(self):
+    # --- review-gap tests ---
+
+    def test_13_oversize_file_counted_not_hashed(self):
+        """File >512KB: skipped from hash but REPORTED in stats, never silent."""
+        big = self.tmp / "skills" / "beta" / "big.bin"
+        big.write_bytes(b"\x00" * (si.MAX_FILE_BYTES + 1))
+        stats = {"oversize": {}, "symlink": {}}
+        s = si.scan_skills(self.dirs, stats)
+        self.assertNotIn("big.bin", s["beta"])           # not tracked
+        self.assertIn("beta", stats["oversize"])          # but reported
+        self.assertIn("big.bin", stats["oversize"]["beta"])
+
+    def test_14_symlink_counted_not_followed(self):
+        """Symlink: not hashed (no target read), but reported in stats."""
+        (self.tmp / "skills" / "beta" / "evil_link.sh").symlink_to("/etc/passwd")
+        stats = {"oversize": {}, "symlink": {}}
+        s = si.scan_skills(self.dirs, stats)
+        self.assertNotIn("evil_link.sh", s["beta"])
+        self.assertIn("beta", stats["symlink"])
+        self.assertIn("evil_link.sh", stats["symlink"]["beta"])
+
+    def test_15_file_to_symlink_flip_detected_as_removed(self):
+        """Replacing a tracked file with a symlink = that path leaves the
+        tracked set -> diff reports it as removed (rug-pull vector)."""
+        before = self.scan()
+        (self.tmp / "skills" / "beta" / "SKILL.md").unlink()
+        (self.tmp / "skills" / "beta" / "SKILL.md").symlink_to("/tmp/evil.md")
+        findings = si.diff_skills(before, self.scan())
+        # beta loses its only tracked file: whole skill flips to "removed";
+        # either way the flip is caught and SKILL.md shows as removed
+        self.assertIn(findings[0]["status"], ("removed", "modified"))
+        self.assertIn("SKILL.md", findings[0]["removed"])
+
+    def test_16_cli_e2e_snapshot_check_modified(self):
         """Full CLI roundtrip as a real subprocess: snapshot -> modify -> check."""
         state = self.tmp / "state"
-        # inject state dir via sitecustomize-free trick: run through a wrapper
         wrapper = self.tmp / "run_cli.py"
         wrapper.write_text(
             "import sys; import skill_integrity as si\n"
@@ -119,66 +152,87 @@ class SkillIntegrityTest(unittest.TestCase):
         cli = ["python3", str(wrapper)]
 
         def run(*a):
-            r = subprocess.run(cli + list(a), capture_output=True, text=True,
-                               env=env)
-            return r
+            return subprocess.run(cli + list(a), capture_output=True, text=True,
+                                  env=env)
 
-        # 1. snapshot clean state
+        # 1. snapshot clean state (records dirs)
         r = run("snapshot", "--dirs", self.dirs[0])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("2 skills", r.stdout)
+        self.assertIn("snapshot dirs", r.stdout)
 
-        # 2. check untouched -> OK, exit 0
-        r = run("check", "--dirs", self.dirs[0])
+        # 2. check WITHOUT --dirs -> uses snapshot's recorded dirs, clean, exit 0
+        r = run("check")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("no skill changed", r.stdout)
 
-        # 3. modify a file -> check detects it, exit 0 (no --fail-on-change)
+        # 3. modify a file -> check detects it, exit 1 (findings default to fail)
         (self.tmp / "skills" / "alpha" / "SKILL.md").write_text("# alpha v2 EVIL\n")
-        r = run("check", "--dirs", self.dirs[0])
-        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run("check")
+        self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("alpha", r.stdout)
         self.assertIn("MODIFIED", r.stdout)
         self.assertIn("SKILL.md", r.stdout)
 
-        # 4. same check with --json parses & matches
-        r = run("check", "--json", "--dirs", self.dirs[0])
+        # 3b. --no-fail-on-change -> same findings but exit 0
+        r = run("check", "--no-fail-on-change")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("MODIFIED", r.stdout)
+
+        # 4. --json parses & matches, includes skip stats field
+        r = run("check", "--json")
+        self.assertEqual(r.returncode, 1)
         data = json.loads(r.stdout)
         self.assertEqual(len(data["findings"]), 1)
         f = data["findings"][0]
         self.assertEqual(f["skill"], "alpha")
         self.assertIn("SKILL.md", f["changed"])
+        self.assertIn("dirs_scanned", data)
+        self.assertEqual(data["dirs_scanned"], self.dirs)
+        self.assertIn("skipped", data)
 
-        # 5. --fail-on-change -> exit 1
-        r = run("check", "--fail-on-change", "--dirs", self.dirs[0])
-        self.assertEqual(r.returncode, 1)
+        # 5. --dirs mismatch: snapshot covered skills/, check another dir ->
+        #    no mass false positives; alpha/beta absent from other dir
+        other = self.tmp / "other-skills" / "solo"
+        other.mkdir(parents=True)
+        (other / "SKILL.md").write_text("# solo\n")
+        r = run("check", "--dirs", str(self.tmp / "other-skills"))
+        self.assertIn("note: scanning explicit dirs", r.stdout)
+        self.assertIn("solo", r.stdout)          # solo is NEW
+        self.assertNotIn("REMOVED", r.stdout)    # alpha/beta not reported gone
 
         # 6. add brand-new malicious-looking file -> still detected
         (self.tmp / "skills" / "beta" / "curl_exfil.sh").write_text("curl evil\n")
-        r = run("check", "--dirs", self.dirs[0])
+        r = run("check")
         self.assertIn("curl_exfil.sh", r.stdout)
 
         # 7. remove a whole skill -> detected as removed
         shutil.rmtree(self.tmp / "skills" / "beta")
-        r = run("check", "--dirs", self.dirs[0])
+        r = run("check")
         self.assertIn("beta", r.stdout)
         self.assertIn("REMOVED", r.stdout)
 
         # 8. new skill appears -> detected as new
         (self.tmp / "skills" / "gamma").mkdir()
         (self.tmp / "skills" / "gamma" / "SKILL.md").write_text("# g\n")
-        r = run("check", "--dirs", self.dirs[0])
+        r = run("check")
         self.assertIn("gamma", r.stdout)
         self.assertIn("NEW", r.stdout)
 
         # 9. re-snapshot -> everything clean again
         r = run("snapshot", "--dirs", self.dirs[0])
         self.assertEqual(r.returncode, 0)
-        r = run("check", "--dirs", self.dirs[0])
+        r = run("check")
         self.assertEqual(r.returncode, 0)
         self.assertIn("no skill changed", r.stdout)
 
-    def test_12_cli_show_and_no_snapshot(self):
+        # 10. oversize file -> warning line appears in check output
+        (self.tmp / "skills" / "gamma" / "huge.bin").write_bytes(
+            b"\x00" * (si.MAX_FILE_BYTES + 1))
+        r = run("check", "--no-fail-on-change")
+        self.assertIn("skipped >512KB", r.stdout)
+
+    def test_17_cli_show_and_no_snapshot(self):
         state = self.tmp / "state2"
         wrapper = self.tmp / "run_cli2.py"
         wrapper.write_text(
@@ -189,19 +243,23 @@ class SkillIntegrityTest(unittest.TestCase):
         cli = ["python3", str(wrapper)]
 
         # check without snapshot -> exit 2, clear message
-        r = subprocess.run(cli + ["check", "--dirs", self.dirs[0]],
-                           capture_output=True, text=True, env=env)
+        r = subprocess.run(cli + ["check"], capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 2)
         self.assertIn("no snapshot", r.stderr)
 
         r = subprocess.run(cli + ["snapshot", "--dirs", self.dirs[0]],
                            capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 0)
-        r = subprocess.run(cli + ["show", "--dirs", self.dirs[0]],
-                           capture_output=True, text=True, env=env)
+        r = subprocess.run(cli + ["show"], capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 0)
         self.assertIn("alpha", r.stdout)
         self.assertIn("beta", r.stdout)
+        self.assertIn("dirs:", r.stdout)  # show displays recorded dirs
+
+        # --dirs was removed from show -> argparse errors (exit 2)
+        r = subprocess.run(cli + ["show", "--dirs", self.dirs[0]],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2)
 
 
 if __name__ == "__main__":
