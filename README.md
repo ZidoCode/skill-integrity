@@ -50,23 +50,30 @@ python3 skill_integrity.py check --json
 
 | Code | Meaning |
 |---|---|
-| 0 | clean, or changes found without `--fail-on-change` |
-| 1 | changes found **and** `--fail-on-change` was passed (CI gate) |
+| 0 | clean (no findings) |
+| 1 | findings exist (default) — pass `--no-fail-on-change` to get 0 instead |
 | 2 | no snapshot exists yet / usage error |
 
 ### Scoped directories
 
-By default it scans `~/.hermes/skills` and `~/.claude/skills`. Add more:
+By default it scans `~/.hermes/skills` and `~/.claude/skills`. The snapshot
+records which dirs it covers; `check` reuses those dirs (no mass false
+positives from a dirs mismatch). Override explicitly when needed:
 
 ```bash
-python3 skill_integrity.py check --dirs ~/work/skills ~/.other/skills
+python3 skill_integrity.py snapshot --dirs ~/work/skills   # record custom dirs
+python3 skill_integrity.py check                            # uses recorded dirs
+python3 skill_integrity.py check --dirs ~/other/skills      # explicit override;
+                                                            # skills outside the
+                                                            # scanned dirs are out
+                                                            # of scope, not "removed"
 ```
 
 ## Suggested cron
 
 ```
 # check skills twice a day, alert if anything moved
-0 */12 * * * python3 ~/skill-integrity/skill_integrity.py check --fail-on-change --json >> ~/.skill-integrity/checks.log
+0 */12 * * * python3 ~/skill-integrity/skill_integrity.py check --json >> ~/.skill-integrity/checks.log
 ```
 
 ## Honest coverage — read this
@@ -77,6 +84,8 @@ identical to a hash. What this tool gives you is the trigger and the
 file list; reading the actual diff before trusting the skill is your half
 of the contract. It tracks files up to 512KB and skips caches (`__pycache__`,
 `node_modules`, `.git`) — it is an inventory-integrity tool, not an antivirus.
+Blind spots are counted, never silent: every check/snapshot prints how many
+files were skipped as oversize (>512KB) or symlinks, and per skill which ones.
 
 ## Threat model
 
