@@ -8,7 +8,8 @@ are reported — the rug-pull signal: a skill that mutates after install without
 the user touching it.
 
 Design rules:
-- Read-only against skills. Snapshots live in ~/.skill-integrity/manifests/.
+- Read-only against skills. Snapshot lives at ~/.skill-integrity/manifest.json
+  (mode 0600, atomic write via temp+rename).
 - JSON output for machines, plain text for humans.
 - Honest coverage: hashes catch ANY byte change to tracked files. It cannot
   judge intent — a legitimate update and a malicious rewrite look identical
