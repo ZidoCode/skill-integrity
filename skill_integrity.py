@@ -69,7 +69,12 @@ def scan_skills(directories=None, stats=None) -> dict:
     """Return {skill_name: {rel_path: sha256}} across all skill dirs.
 
     stats: optional dict; filled with {"oversize": {skill: [paths]},
-    "symlink": {skill: [paths]}} so callers can report blind spots.
+    "symlink": {skill: [paths]}, "unreadable": {skill: [paths]}} so callers
+    can report blind spots. A skill directory that cannot be entered
+    (permission) is a blind spot exactly like an oversize file: it is
+    counted and reported, never silently treated as empty — an empty scan
+    of a locked-down skill would otherwise hide exactly the modification
+    this tool exists to catch.
     """
     directories = directories if directories is not None else list(DEFAULT_DIRS)
     skills = {}
@@ -77,13 +82,28 @@ def scan_skills(directories=None, stats=None) -> dict:
         base = Path(base)
         if not base.is_dir():
             continue
-        for entry in sorted(base.iterdir()):
+        try:
+            entries = sorted(base.iterdir())
+        except OSError:
+            if stats is not None:
+                stats["unreadable"].setdefault(
+                    f"{base.name} (base dir)", []).append(str(base))
+            continue
+        for entry in entries:
             if not entry.is_dir():
                 continue
             name = entry.name
             if name in skills:
                 # collision across dirs — prefix with dir name
                 name = f"{base.name}:{entry.name}"
+            # probe readability BEFORE hashing: an unreadable skill dir
+            # yields an empty walk, which must not be recorded as "clean"
+            try:
+                os.listdir(entry)
+            except OSError:
+                if stats is not None:
+                    stats["unreadable"].setdefault(name, []).append("(dir)")
+                continue
             files = {}
             for rel, p in iter_skill_files(entry):
                 if rel is None:
@@ -94,6 +114,8 @@ def scan_skills(directories=None, stats=None) -> dict:
                 try:
                     files[rel] = sha256_file(p)
                 except OSError:
+                    if stats is not None:
+                        stats["unreadable"].setdefault(name, []).append(rel)
                     continue
             skills[name] = files
     return skills
@@ -157,7 +179,8 @@ def diff_skills(before: dict, after: dict) -> list:
 
 def print_skip_stats(stats: dict) -> None:
     for kind, label in (("oversize", ">512KB (not hashed)"),
-                        ("symlink", "symlink (not hashed)")):
+                        ("symlink", "symlink (not hashed)"),
+                        ("unreadable", "unreadable (NOT scanned — check perms)")):
         total = sum(len(v) for v in stats[kind].values())
         if total:
             skills = ", ".join(f"{s} ({len(v)})" for s, v in sorted(stats[kind].items()))
@@ -166,7 +189,7 @@ def print_skip_stats(stats: dict) -> None:
 
 def cmd_snapshot(args) -> int:
     dirs = args.dirs if args.dirs is not None else list(DEFAULT_DIRS)
-    stats = {"oversize": {}, "symlink": {}}
+    stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
     skills = scan_skills(dirs, stats)
     save_manifest(skills, dirs)
     total_files = sum(len(v) for v in skills.values())
@@ -191,7 +214,7 @@ def cmd_check(args) -> int:
     else:
         dirs = manifest.get("dirs") or list(DEFAULT_DIRS)
     before = manifest.get("skills", {})
-    stats = {"oversize": {}, "symlink": {}}
+    stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
     after = scan_skills(dirs, stats)
     if args.dirs is not None:
         # Explicit --dirs: skills outside the scanned dirs are OUT OF SCOPE,
@@ -201,6 +224,13 @@ def cmd_check(args) -> int:
                   if k in scanned_prefixes or k.split(":", 1)[-1] in scanned_prefixes
                   or any(k.startswith(f"{Path(d).name}:") for d in dirs)}
     findings = diff_skills(before, after)
+    # A blind spot that exists NOW is a non-clean state even when diff is
+    # empty: a skill unreadable at both snapshot and check time would
+    # otherwise produce "OK" while nothing was actually verified.
+    for skill, paths in sorted(stats["unreadable"].items()):
+        findings.append({"skill": skill, "status": "unreadable",
+                         "added": [], "changed": [], "removed": [],
+                         "paths": paths})
     if args.json:
         print(json.dumps({"checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                           "snapshot_at": manifest.get("saved_at"),
@@ -215,8 +245,11 @@ def cmd_check(args) -> int:
         if not findings:
             print("OK — no skill changed since snapshot.")
         for f in findings:
-            mark = {"new": "+", "removed": "-", "modified": "~"}[f["status"]]
+            mark = {"new": "+", "removed": "-", "modified": "~",
+                    "unreadable": "?"}[f["status"]]
             print(f"\n[{mark}] {f['skill']} — {f['status'].upper()}")
+            for rel in f.get("paths", []):
+                print(f"    unreadable: {rel}")
             for rel in f["changed"]:
                 print(f"    changed: {rel}")
             for rel in f["added"]:

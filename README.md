@@ -102,6 +102,9 @@ of the contract. It tracks files up to 512KB and skips caches (`__pycache__`,
 `node_modules`, `.git`) — it is an inventory-integrity tool, not an antivirus.
 Blind spots are counted, never silent: every check/snapshot prints how many
 files were skipped as oversize (>512KB) or symlinks, and per skill which ones.
+A skill directory that cannot be entered (permissions) is reported as
+**unreadable** — it is never treated as a clean empty scan, because an
+unreadable skill is exactly where a modification can hide.
 
 ## Threat model
 
@@ -111,9 +114,11 @@ files were skipped as oversize (>512KB) or symlinks, and per skill which ones.
 | New file quietly added to a skill | ✅ |
 | Skill deleted (or quarantined) | ✅ |
 | Brand-new skill appears | ✅ |
+| Skill directory made unreadable (perm change to hide changes) | ✅ (reported as unreadable, never "clean") |
 | Legitimate intentional update | ✅ (flagged — you re-snapshot after reviewing) |
 | Malicious content inside an unchanged file | ❌ (out of scope — see mcp-scan & friends) |
 | File contents judged for intent | ❌ (hashes don't read minds) |
+| Attacker with write access re-snapshots over their tracks | ❌ (the snapshot is agent-writable by design — see above) |
 
 ## State
 

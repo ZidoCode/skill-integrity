@@ -232,6 +232,79 @@ class SkillIntegrityTest(unittest.TestCase):
         r = run("check", "--no-fail-on-change")
         self.assertIn("skipped >512KB", r.stdout)
 
+
+    def test_20_unreadable_at_check_is_nonclean_even_without_diff(self):
+        """Skill unreadable at BOTH snapshot and check: diff is empty but the
+        check must NOT be OK - unreadable now = non-clean state (rc 1)."""
+        import io as _io
+        import contextlib as _cl
+        locked = self.tmp / "skills" / "locked"
+        locked.mkdir()
+        (locked / "SKILL.md").write_text("# locked\n")
+        state = self.tmp / "state20"
+        old = si.STATE_DIR
+        si.STATE_DIR = str(state)
+        os.chmod(locked, 0o000)
+        try:
+            class SnapArgs:
+                dirs = self.dirs
+                json = True
+            buf = _io.StringIO()
+            with _cl.redirect_stdout(buf):
+                si.cmd_snapshot(SnapArgs())
+
+            class ChkArgs:
+                dirs = None
+                json = True
+                fail_on_change = True
+            buf2 = _io.StringIO()
+            with _cl.redirect_stdout(buf2):
+                rc = si.cmd_check(ChkArgs())
+            self.assertEqual(rc, 1)
+            out = json.loads(buf2.getvalue())
+            statuses = [f["status"] for f in out["findings"]]
+            self.assertIn("unreadable", statuses)
+        finally:
+            os.chmod(locked, 0o755)
+            si.STATE_DIR = old
+
+    def test_18_unreadable_skill_dir_reported_not_clean(self):
+        """chmod-000 skill dir: NOT scanned, NOT recorded as empty/clean —
+        it appears in stats['unreadable'] (blind spot never silent)."""
+        locked = self.tmp / "skills" / "locked"
+        locked.mkdir()
+        (locked / "SKILL.md").write_text("# locked\n")
+        os.chmod(locked, 0o000)
+        try:
+            stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
+            s = si.scan_skills(self.dirs, stats)
+            self.assertNotIn("locked", s)                  # not scanned
+            self.assertIn("locked", stats["unreadable"])   # but reported
+            # snapshot still works and records other skills
+            state = self.tmp / "state3"
+            old = si.STATE_DIR
+            si.STATE_DIR = str(state)
+            try:
+                si.save_manifest(si.scan_skills(self.dirs, stats), self.dirs)
+                self.assertIn("alpha", si.load_manifest()["skills"])
+            finally:
+                si.STATE_DIR = old
+        finally:
+            os.chmod(locked, 0o755)
+
+    def test_19_unreadable_file_in_skill_reported(self):
+        """chmod-000 FILE inside a skill: counted in stats['unreadable']."""
+        f = self.tmp / "skills" / "beta" / "secret.sh"
+        f.write_text("echo x\n")
+        os.chmod(f, 0o000)
+        try:
+            stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
+            s = si.scan_skills(self.dirs, stats)
+            self.assertNotIn("secret.sh", s["beta"])
+            self.assertIn("secret.sh", stats["unreadable"]["beta"])
+        finally:
+            os.chmod(f, 0o644)
+
     def test_17_cli_show_and_no_snapshot(self):
         state = self.tmp / "state2"
         wrapper = self.tmp / "run_cli2.py"
