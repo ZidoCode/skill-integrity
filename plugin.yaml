@@ -1,0 +1,6 @@
+name: skill-integrity
+version: "0.1.0"
+description: Rug-pull detection for installed agent skills — fingerprints every file in every skill directory (SHA-256), keeps a profile-local snapshot, and reports exactly which skill files changed, appeared, or vanished since. A skill that mutates after install without the user touching it is the rug-pull signal. Read-only, zero dependencies, zero network calls, blind spots (oversize files, symlinks) counted and never silent.
+provides_hooks:
+  - post_auxiliary_call
+requires_env: []

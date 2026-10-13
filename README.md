@@ -33,6 +33,22 @@ git clone https://github.com/ZidoCode/skill-integrity
 python3 skill-integrity/skill_integrity.py snapshot   # baseline
 ```
 
+### As a Hermes plugin
+
+Drop it in your plugins directory and the agent itself gets told when a
+skill changes under it (hourly cadence, findings only — a clean check
+prints nothing):
+
+```bash
+git clone https://github.com/ZidoCode/skill-integrity ~/.hermes/plugins/skill-integrity
+hermes plugins enable skill-integrity
+```
+
+Snapshot location follows the active Hermes profile
+(`~/.hermes/plugin-data/skill-integrity/manifest.json`) — the CLI defaults
+to `~/.skill-integrity/manifest.json` when run standalone; both are
+mode-0600, local-only, no network.
+
 ## Usage
 
 ```bash
