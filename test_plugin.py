@@ -32,7 +32,7 @@ try:
     spec.loader.exec_module(mod)
 
     # 1. loads as a package outside plugin-dir sys.path
-    check("pkg-import: wrapper loads", mod.__version__ == "0.1.0")
+    check("pkg-import: wrapper loads", mod.__version__ == "0.1.2")
 
     # 2. core is imported, not duplicated: wrapper must not define
     #    scan_skills/sha256_file itself

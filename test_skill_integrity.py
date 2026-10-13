@@ -233,6 +233,7 @@ class SkillIntegrityTest(unittest.TestCase):
         self.assertIn("skipped >512KB", r.stdout)
 
 
+    @unittest.skipIf(os.geteuid() == 0, "chmod-000 does not block root — simulation leaks")
     def test_20_unreadable_at_check_is_nonclean_even_without_diff(self):
         """Skill unreadable at BOTH snapshot and check: diff is empty but the
         check must NOT be OK - unreadable now = non-clean state (rc 1)."""
@@ -268,6 +269,7 @@ class SkillIntegrityTest(unittest.TestCase):
             os.chmod(locked, 0o755)
             si.STATE_DIR = old
 
+    @unittest.skipIf(os.geteuid() == 0, "chmod-000 does not block root — simulation leaks")
     def test_18_unreadable_skill_dir_reported_not_clean(self):
         """chmod-000 skill dir: NOT scanned, NOT recorded as empty/clean —
         it appears in stats['unreadable'] (blind spot never silent)."""
@@ -292,6 +294,7 @@ class SkillIntegrityTest(unittest.TestCase):
         finally:
             os.chmod(locked, 0o755)
 
+    @unittest.skipIf(os.geteuid() == 0, "chmod-000 does not block root — simulation leaks")
     def test_19_unreadable_file_in_skill_reported(self):
         """chmod-000 FILE inside a skill: counted in stats['unreadable']."""
         f = self.tmp / "skills" / "beta" / "secret.sh"

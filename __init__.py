@@ -16,7 +16,7 @@ import json
 import os
 import time
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 # cadence: at most one automatic check per session per hour
 _MIN_INTERVAL_S = 3600
