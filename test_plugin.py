@@ -97,10 +97,17 @@ try:
     mod._profile_state_dir = orig_psd
     check("cmd: check without snapshot tells the user",
           "no snapshot" in out.lower())
-    # seed a real snapshot through the command, then check via command
+    # seed a real snapshot through the command, then check via command.
+    # Hermetic: the handler resolves state via _profile_state_dir(), so keep
+    # it pointed at snap_state for this check (the snapshot above lives
+    # there — restoring the real profile dir here would read whatever the
+    # host machine happens to have, a works-on-my-machine trap).
     r = mod.snapshot_once(state_dir=snap_state)
     check("cmd: snapshot via handler works", r.get("ok") is True)
+    orig_psd2 = mod._profile_state_dir
+    mod._profile_state_dir = lambda: snap_state
     out = mod._cmd_handler("check")
+    mod._profile_state_dir = orig_psd2
     check("cmd: check after snapshot runs", "no snapshot" not in out.lower())
 
     # 7. pre_llm_call returns {"context": ...} on findings, None when clean
