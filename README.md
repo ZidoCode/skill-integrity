@@ -36,18 +36,32 @@ python3 skill-integrity/skill_integrity.py snapshot   # baseline
 ### As a Hermes plugin
 
 Drop it in your plugins directory and the agent itself gets told when a
-skill changes under it (hourly cadence, findings only — a clean check
-prints nothing):
+skill changes under it: the plugin's `pre_llm_call` hook injects the
+findings into the agent's context (hourly cadence, findings only — a clean
+check injects nothing):
 
 ```bash
 git clone https://github.com/ZidoCode/skill-integrity ~/.hermes/plugins/skill-integrity
 hermes plugins enable skill-integrity
 ```
 
+The plugin also registers a `/skill-integrity` slash command in the chat:
+
+```
+/skill-integrity snapshot   # record the baseline the hourly hook reads
+/skill-integrity check      # file-level diff vs the snapshot
+/skill-integrity show       # snapshot summary
+```
+
+Run `/skill-integrity snapshot` once after installing your skills — without
+a baseline the hook has nothing to compare against and stays silent.
+
 Snapshot location follows the active Hermes profile
 (`~/.hermes/plugin-data/skill-integrity/manifest.json`) — the CLI defaults
 to `~/.skill-integrity/manifest.json` when run standalone; both are
-mode-0600, local-only, no network.
+mode-0600, local-only, no network. In the plugin, both the snapshot dir and
+the scanned skill dirs derive from `get_hermes_home()`, so non-default
+profiles are covered.
 
 ## Usage
 
