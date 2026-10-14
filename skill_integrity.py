@@ -32,6 +32,25 @@ DEFAULT_DIRS = [
 STATE_DIR = os.path.expanduser("~/.skill-integrity")
 MANIFEST_VERSION = 2  # v2: manifest records the dirs the snapshot covers
 
+
+def _default_skill_dirs() -> list:
+    """Skill directories to scan when the user passes no --dirs.
+
+    Prefers the active Hermes profile's skills dir (via get_hermes_home)
+    so non-default profiles are covered; falls back to the classic
+    locations when Hermes is not importable (standalone CLI use).
+    """
+    dirs = []
+    try:
+        from hermes_constants import get_hermes_home
+        dirs.append(os.path.join(str(get_hermes_home()), "skills"))
+    except Exception:
+        pass
+    for d in DEFAULT_DIRS:
+        if d not in dirs:
+            dirs.append(d)
+    return dirs
+
 # Files worth tracking inside a skill: everything except caches/junk.
 SKIP_PARTS = {"__pycache__", ".git", "node_modules", ".DS_Store"}
 MAX_FILE_BYTES = 512 * 1024  # 512KB per file cap; bigger = binary/junk
@@ -188,7 +207,7 @@ def print_skip_stats(stats: dict) -> None:
 
 
 def cmd_snapshot(args) -> int:
-    dirs = args.dirs if args.dirs is not None else list(DEFAULT_DIRS)
+    dirs = args.dirs if args.dirs is not None else _default_skill_dirs()
     stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
     skills = scan_skills(dirs, stats)
     save_manifest(skills, dirs)
@@ -212,7 +231,7 @@ def cmd_check(args) -> int:
         print(f"note: scanning explicit dirs (snapshot covered: "
               f"{' '.join(manifest.get('dirs', ['?']))})")
     else:
-        dirs = manifest.get("dirs") or list(DEFAULT_DIRS)
+        dirs = manifest.get("dirs") or _default_skill_dirs()
     before = manifest.get("skills", {})
     stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
     after = scan_skills(dirs, stats)
@@ -289,6 +308,12 @@ def main(argv=None):
         prog="skill-integrity",
         description="Fingerprint installed agent skills and detect "
                     "changes (rug-pull signal) since the last snapshot.")
+    ap.add_argument("--state-dir", default=None,
+                    help="snapshot directory (default: ~/.skill-integrity). "
+                         "The Hermes plugin wrapper keeps its snapshot under "
+                         "<HERMES_HOME>/plugin-data/skill-integrity — pass "
+                         "that path here to snapshot/check the same manifest "
+                         "the plugin hook reads.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def add_dirs(p):
@@ -313,6 +338,9 @@ def main(argv=None):
     p_show.set_defaults(func=cmd_show)
 
     args = ap.parse_args(argv)
+    if args.state_dir:
+        global STATE_DIR
+        STATE_DIR = os.path.expanduser(args.state_dir)
     if getattr(args, "no_fail_on_change", False):
         args.fail_on_change = False
     return args.func(args)

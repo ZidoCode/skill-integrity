@@ -63,6 +63,13 @@ mode-0600, local-only, no network. In the plugin, both the snapshot dir and
 the scanned skill dirs derive from `get_hermes_home()`, so non-default
 profiles are covered.
 
+The standalone CLI can point at the plugin's manifest with `--state-dir`:
+
+```bash
+python3 skill_integrity.py --state-dir ~/.hermes/plugin-data/skill-integrity snapshot
+python3 skill_integrity.py --state-dir ~/.hermes/plugin-data/skill-integrity check --json
+```
+
 ## Usage
 
 ```bash
