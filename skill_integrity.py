@@ -30,7 +30,7 @@ DEFAULT_DIRS = [
     os.path.expanduser("~/.claude/skills"),
 ]
 STATE_DIR = os.path.expanduser("~/.skill-integrity")
-MANIFEST_VERSION = 2  # v2: manifest records the dirs the snapshot covers
+MANIFEST_VERSION = 3  # v3: manifest also records which dir each skill came from
 
 
 def _default_skill_dirs() -> list:
@@ -67,6 +67,13 @@ def sha256_file(path: Path) -> str:
 def iter_skill_files(skill_dir: Path):
     """Yield (rel_path, path) for tracked files; count skips as (rel, kind)."""
     for root, dirs, files in os.walk(skill_dir):
+        # A symlinked subdirectory is never followed, so anything inside it is
+        # invisible to the hash. Report it instead of silently trusting it.
+        for name in list(dirs):
+            candidate = Path(root) / name
+            if candidate.is_symlink():
+                yield None, ("symlink-dir", str(candidate.relative_to(skill_dir)))
+                dirs.remove(name)
         dirs[:] = [d for d in dirs if d not in SKIP_PARTS]
         for name in sorted(files):
             p = Path(root) / name
@@ -84,7 +91,7 @@ def iter_skill_files(skill_dir: Path):
                 continue
 
 
-def scan_skills(directories=None, stats=None) -> dict:
+def scan_skills(directories=None, stats=None, origins=None) -> dict:
     """Return {skill_name: {rel_path: sha256}} across all skill dirs.
 
     stats: optional dict; filled with {"oversize": {skill: [paths]},
@@ -101,6 +108,8 @@ def scan_skills(directories=None, stats=None) -> dict:
         base = Path(base)
         if not base.is_dir():
             continue
+        if origins is not None:
+            origin = str(base.resolve())
         try:
             entries = sorted(base.iterdir())
         except OSError:
@@ -137,6 +146,8 @@ def scan_skills(directories=None, stats=None) -> dict:
                         stats["unreadable"].setdefault(name, []).append(rel)
                     continue
             skills[name] = files
+            if origins is not None:
+                origins[name] = origin
     return skills
 
 
@@ -146,19 +157,20 @@ def load_manifest() -> dict:
         return {}
     try:
         data = json.loads(path.read_text())
-        if data.get("version") in (1, MANIFEST_VERSION):
+        if data.get("version") in (1, 2, MANIFEST_VERSION):
             return data
     except (json.JSONDecodeError, OSError):
         pass
     return {}
 
 
-def save_manifest(skills: dict, dirs: list) -> None:
+def save_manifest(skills: dict, dirs: list, origins: dict | None = None) -> None:
     Path(STATE_DIR).mkdir(parents=True, exist_ok=True)
     data = {
         "version": MANIFEST_VERSION,
         "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "dirs": dirs,
+        "skill_dirs": origins or {},
         "skills": skills,
     }
     path = Path(STATE_DIR) / "manifest.json"
@@ -199,6 +211,7 @@ def diff_skills(before: dict, after: dict) -> list:
 def print_skip_stats(stats: dict) -> None:
     for kind, label in (("oversize", ">512KB (not hashed)"),
                         ("symlink", "symlink (not hashed)"),
+                        ("symlink-dir", "symlinked dir (NOT entered — content unverified)"),
                         ("unreadable", "unreadable (NOT scanned — check perms)")):
         total = sum(len(v) for v in stats[kind].values())
         if total:
@@ -208,9 +221,10 @@ def print_skip_stats(stats: dict) -> None:
 
 def cmd_snapshot(args) -> int:
     dirs = args.dirs if args.dirs is not None else _default_skill_dirs()
-    stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
-    skills = scan_skills(dirs, stats)
-    save_manifest(skills, dirs)
+    stats = {"oversize": {}, "symlink": {}, "symlink-dir": {}, "unreadable": {}}
+    origins: dict = {}
+    skills = scan_skills(dirs, stats, origins)
+    save_manifest(skills, dirs, origins)
     total_files = sum(len(v) for v in skills.values())
     print(f"snapshot saved: {len(skills)} skills, {total_files} files "
           f"-> {STATE_DIR}/manifest.json")
@@ -233,15 +247,18 @@ def cmd_check(args) -> int:
     else:
         dirs = manifest.get("dirs") or _default_skill_dirs()
     before = manifest.get("skills", {})
-    stats = {"oversize": {}, "symlink": {}, "unreadable": {}}
+    stats = {"oversize": {}, "symlink": {}, "symlink-dir": {}, "unreadable": {}}
     after = scan_skills(dirs, stats)
     if args.dirs is not None:
         # Explicit --dirs: skills outside the scanned dirs are OUT OF SCOPE,
-        # not "removed" — restrict the comparison to the scanned dirs.
-        scanned_prefixes = {Path(d).name for d in dirs if d}
-        before = {k: v for k, v in before.items()
-                  if k in scanned_prefixes or k.split(":", 1)[-1] in scanned_prefixes
-                  or any(k.startswith(f"{Path(d).name}:") for d in dirs)}
+        # not "removed". The manifest records which dir each skill came from;
+        # without that map a name filter matches nothing and the check reports
+        # a clean run it never performed.
+        skill_dirs = manifest.get("skill_dirs") or {}
+        allowed = {str(Path(d).resolve()) for d in dirs if d}
+        if skill_dirs:
+            before = {k: v for k, v in before.items()
+                      if str(Path(skill_dirs.get(k, "")).resolve()) in allowed}
     findings = diff_skills(before, after)
     # A blind spot that exists NOW is a non-clean state even when diff is
     # empty: a skill unreadable at both snapshot and check time would

@@ -338,5 +338,46 @@ class SkillIntegrityTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+class CheckDirsScopeTest(unittest.TestCase):
+    """`check --dirs` must still see new skills inside the scanned dirs."""
+
+    def test_check_dirs_detects_new_skill(self):
+        tmp = Path(tempfile.mkdtemp())
+        skills = tmp / "skills"
+        for name in ("alpha", "beta"):
+            (skills / name).mkdir(parents=True)
+            (skills / name / "SKILL.md").write_text("x")
+        state = tmp / "state"
+        env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.abspath(__file__))}
+        cli = [sys.executable, "skill_integrity.py", "--state-dir", str(state)]
+        subprocess.run(cli + ["snapshot", "--dirs", str(skills)], check=True,
+                       capture_output=True, env=env)
+        (skills / "gamma").mkdir()
+        (skills / "gamma" / "SKILL.md").write_text("y")
+        r = subprocess.run(cli + ["check", "--dirs", str(skills)],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("gamma", r.stdout)
+        self.assertIn("NEW", r.stdout)
+
+
+class SymlinkDirBlindSpotTest(unittest.TestCase):
+    """A symlinked skill subdir is not entered; it must be reported."""
+
+    def test_symlinked_dir_recorded(self):
+        tmp = Path(tempfile.mkdtemp())
+        skill = tmp / "skills" / "sk"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("t")
+        outside = tmp / "outside"
+        outside.mkdir()
+        (outside / "run.sh").write_text("v1")
+        os.symlink(outside, skill / "vendor")
+
+        stats = {"oversize": {}, "symlink": {}, "symlink-dir": {}, "unreadable": {}}
+        si.scan_skills([tmp / "skills"], stats)
+        self.assertEqual(stats["symlink-dir"].get("sk"), ["vendor"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
